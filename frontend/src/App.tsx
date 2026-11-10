@@ -1,0 +1,623 @@
+﻿import React, { useCallback, useEffect, useState } from 'react';
+import { api, API_BASE_URL } from './api';
+import { ClassSummary, HoldStatus, MyHoldItem } from './types';
+
+const STUDENT_ID_STORAGE_KEY = 'school_admission_student_id';
+
+export function formatRemainingTime(expiresAtIso: string, nowMs: number): {
+  expired: boolean;
+  text: string;
+  secondsLeft: number;
+} {
+  const targetMs = new Date(expiresAtIso).getTime();
+  if (Number.isNaN(targetMs)) {
+    return { expired: false, text: '--:--', secondsLeft: 0 };
+  }
+  const diffSeconds = Math.floor((targetMs - nowMs) / 1000);
+  if (diffSeconds <= 0) {
+    return { expired: true, text: '00:00 (মেয়াদ শেষ)', secondsLeft: 0 };
+  }
+  const mins = Math.floor(diffSeconds / 60);
+  const secs = diffSeconds % 60;
+  return {
+    expired: false,
+    text: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
+    secondsLeft: diffSeconds
+  };
+}
+
+export default function App() {
+  const [studentId, setStudentId] = useState<string>(() => {
+    return localStorage.getItem(STUDENT_ID_STORAGE_KEY) || '';
+  });
+
+  const [classes, setClasses] = useState<ClassSummary[]>([]);
+  const [myHolds, setMyHolds] = useState<MyHoldItem[]>([]);
+  const [selectedHoldId, setSelectedHoldId] = useState<string | null>(null);
+
+  const [classNameInput, setClassNameInput] = useState('');
+  const [totalSeatsInput, setTotalSeatsInput] = useState('120');
+
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [serverOffline, setServerOffline] = useState<boolean>(false);
+  const [loadingAction, setLoadingAction] = useState<string | null>(null);
+
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+
+  // Persist Student ID in localStorage so page refresh / browser reopen restores applications
+  const handleStudentIdChange = (value: string) => {
+    const cleaned = value.replace(/\s+/g, '');
+    setStudentId(cleaned);
+    localStorage.setItem(STUDENT_ID_STORAGE_KEY, cleaned);
+  };
+
+  const showNotice = (type: 'error' | 'success', msg: string) => {
+    if (type === 'error') {
+      setErrorMessage(msg);
+      setSuccessMessage(null);
+    } else {
+      setSuccessMessage(msg);
+      setErrorMessage(null);
+    }
+  };
+
+  const fetchAllData = useCallback(async (currentStudentId: string) => {
+    try {
+      const classList = await api.getClasses();
+      setClasses(classList);
+      setServerOffline(false);
+
+      if (currentStudentId.trim().length > 0) {
+        const holds = await api.getMyHolds(currentStudentId.trim());
+        setMyHolds(holds);
+      } else {
+        setMyHolds([]);
+      }
+    } catch (err) {
+      setServerOffline(true);
+      const message = err instanceof Error ? err.message : 'সার্ভারের সাথে সংযোগ বিচ্ছিন্ন হয়েছে।';
+      setErrorMessage(message);
+    }
+  }, []);
+
+  // Initial load and periodic polling every 2 seconds for live seat updates without page reload
+  useEffect(() => {
+    fetchAllData(studentId);
+    const interval = setInterval(() => {
+      fetchAllData(studentId);
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [fetchAllData, studentId]);
+
+  // 1-second timer to update countdowns and flip expired HELD applications to EXPIRED without reload
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Derive effective status immediately when timer hits 00:00
+  const getEffectiveStatus = (hold: MyHoldItem): HoldStatus => {
+    if (hold.status === 'HELD') {
+      const { expired } = formatRemainingTime(hold.expiresAt, nowMs);
+      if (expired) {
+        return 'EXPIRED';
+      }
+    }
+    return hold.status;
+  };
+
+  const validateStudentId = (): string | null => {
+    const trimmed = studentId.trim();
+    if (!trimmed) {
+      showNotice('error', 'অনুগ্রহ করে উপরে শিক্ষার্থীর ১৭ অঙ্কের জন্ম নিবন্ধন নম্বর লিখুন (Please enter the 17-digit Birth Registration Number)।');
+      return null;
+    }
+    if (!/^\d{17}$/.test(trimmed)) {
+      showNotice('error', 'জন্ম নিবন্ধন নম্বর অবশ্যই ১৭ অঙ্কের সংখ্যা হতে হবে (যেমন: 20152691234567890)।');
+      return null;
+    }
+    return trimmed;
+  };
+
+  // 1. Admin: Create Class
+  const handleCreateClass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedName = classNameInput.trim();
+    const seats = Number(totalSeatsInput);
+
+    if (!trimmedName) {
+      showNotice('error', 'শ্রেণীর নাম (Class Name) খালি রাখা যাবে না।');
+      return;
+    }
+    if (!Number.isInteger(seats) || seats <= 0) {
+      showNotice('error', 'মোট আসন সংখ্যা (Total Seats) অবশ্যই ১ বা তার বেশি পূর্ণসংখ্যা হতে হবে।');
+      return;
+    }
+
+    setLoadingAction('create-class');
+    try {
+      const created = await api.createClass(trimmedName, seats);
+      setClassNameInput('');
+      setTotalSeatsInput('120');
+      showNotice('success', `"${created.name}" (${created.totalSeats} আসন) সফলভাবে তৈরি হয়েছে!`);
+      await fetchAllData(studentId);
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Class তৈরি করা সম্ভব হয়নি।');
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  // 2. Guardian/Student: Apply (Hold Seat)
+  const handleApplyHold = async (cls: ClassSummary) => {
+    const validId = validateStudentId();
+    if (!validId) return;
+
+    setLoadingAction(`hold-${cls.id}`);
+    try {
+      const createdHold = await api.createHold(cls.id, validId);
+      setSelectedHoldId(createdHold.holdId);
+      showNotice('success', `"${cls.name}"-এ আপনার আসন সাময়িকভাবে সংরক্ষিত (HELD) হয়েছে। নির্ধারিত সময়ের মধ্যে ভর্তি ফি জমা দিন।`);
+      await fetchAllData(validId);
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'আবেদন সম্পন্ন করা যায়নি।');
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  // 3. Confirm Hold ("ভর্তি ফি দিন")
+  const handleConfirmHold = async (hold: MyHoldItem) => {
+    const validId = validateStudentId();
+    if (!validId) return;
+
+    const effectiveStatus = getEffectiveStatus(hold);
+    if (effectiveStatus !== 'HELD') {
+      showNotice('error', 'এই আবেদনের মেয়াদ শেষ হয়ে গেছে অথবা এটি আর সক্রিয় নেই।');
+      return;
+    }
+
+    setLoadingAction(`confirm-${hold.holdId}`);
+    try {
+      await api.confirmHold(hold.holdId, validId);
+      showNotice('success', `অভিনন্দন! "${hold.className}"-এ আপনার ভর্তি ফি জমা ও ভর্তি নিশ্চিত (CONFIRMED) হয়েছে।`);
+      await fetchAllData(validId);
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'ভর্তি নিশ্চিত করা যায়নি।');
+      await fetchAllData(validId);
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  // 4. Cancel Hold ("বাতিল")
+  const handleCancelHold = async (hold: MyHoldItem) => {
+    const validId = validateStudentId();
+    if (!validId) return;
+
+    setLoadingAction(`cancel-${hold.holdId}`);
+    try {
+      await api.cancelHold(hold.holdId, validId);
+      showNotice('success', `"${hold.className}"-এর আবেদনটি বাতিল (CANCELLED) করা হয়েছে এবং আসনটি মুক্ত করা হয়েছে।`);
+      await fetchAllData(validId);
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'আবেদন বাতিল করা যায়নি।');
+      await fetchAllData(validId);
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const activeHold =
+    myHolds.find((h) => h.holdId === selectedHoldId) ||
+    myHolds.find((h) => getEffectiveStatus(h) === 'HELD') ||
+    myHolds[0] ||
+    null;
+
+  const statusBadge = (status: HoldStatus) => {
+    switch (status) {
+      case 'HELD':
+        return <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800">HELD (আসন সংরক্ষিত)</span>;
+      case 'CONFIRMED':
+        return <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">CONFIRMED (ভর্তি নিশ্চিত)</span>;
+      case 'EXPIRED':
+        return <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800">EXPIRED (মেয়াদ উত্তীর্ণ)</span>;
+      case 'CANCELLED':
+        return <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-slate-200 text-slate-700">CANCELLED (বাতিল)</span>;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-12">
+      {/* Top Header & Student Identity Bar */}
+      <header className="bg-indigo-900 text-white shadow-md sticky top-0 z-20">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <h1 className="text-xl md:text-2xl font-bold tracking-tight">
+              অনলাইন স্কুল ভর্তি সিস্টেম (School Admission System)
+            </h1>
+            <p className="text-xs text-indigo-200 mt-0.5">
+              আগে আবেদন করলে আগে পাবেন ভিত্তিতে তাৎক্ষণিক আসন সংরক্ষণ ও ভর্তি নিশ্চিতকরণ • API: {API_BASE_URL}
+            </p>
+          </div>
+
+          <div className="bg-indigo-950/80 border border-indigo-700 rounded-xl p-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            <div className="flex-1">
+              <label htmlFor="student-id-input" className="block text-xs font-medium text-indigo-200 mb-1">
+                শিক্ষার্থীর জন্ম নিবন্ধন নম্বর (১৭ অঙ্ক / X-Student-Id)
+              </label>
+              <input
+                id="student-id-input"
+                type="text"
+                maxLength={17}
+                value={studentId}
+                onChange={(e) => handleStudentIdChange(e.target.value)}
+                placeholder="যেমন: 20152691234567890"
+                className="w-full sm:w-64 px-3 py-1.5 rounded-lg bg-white text-slate-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => handleStudentIdChange('20152691234567890')}
+              className="text-xs bg-indigo-700 hover:bg-indigo-600 text-white px-2.5 py-2 rounded-lg font-medium transition self-end sm:self-center"
+              title="পরীক্ষার জন্য ১৭ অঙ্কের নমুনা জন্ম নিবন্ধন নম্বর বসাতে ক্লিক করুন"
+            >
+              নমুনা নম্বর বসান
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto px-4 mt-6 space-y-6">
+        {/* Server Offline Warning */}
+        {serverOffline && (
+          <div role="alert" className="bg-rose-50 border-l-4 border-rose-600 p-4 rounded-lg shadow-sm flex items-center justify-between">
+            <div>
+              <p className="font-bold text-rose-900">সার্ভার বন্ধ বা সংযোগ বিচ্ছিন্ন (Server Offline)</p>
+              <p className="text-sm text-rose-700">
+                ব্যাকএন্ড সার্ভার ({API_BASE_URL})-এর সাথে সংযোগ স্থাপন করা যাচ্ছে না। অনুগ্রহ করে সার্ভার চালু আছে কিনা যাচাই করুন।
+              </p>
+            </div>
+            <button
+              onClick={() => fetchAllData(studentId)}
+              className="px-3 py-1.5 bg-rose-600 text-white text-xs font-semibold rounded-lg hover:bg-rose-700"
+            >
+              পুনরায় চেষ্টা করুন
+            </button>
+          </div>
+        )}
+
+        {/* User-Friendly Error Banner */}
+        {errorMessage && (
+          <div role="alert" className="bg-rose-50 border border-rose-300 text-rose-900 px-4 py-3 rounded-xl shadow-sm flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <span className="text-rose-600 font-bold">ত্রুটি:</span>
+              <span>{errorMessage}</span>
+            </div>
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="text-xs font-bold text-rose-700 hover:underline ml-4"
+            >
+              বন্ধ করুন ✕
+            </button>
+          </div>
+        )}
+
+        {/* Success Banner */}
+        {successMessage && (
+          <div role="status" className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-4 py-3 rounded-xl shadow-sm flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <span className="text-emerald-600 font-bold">সফল:</span>
+              <span>{successMessage}</span>
+            </div>
+            <button
+              onClick={() => setSuccessMessage(null)}
+              className="text-xs font-bold text-emerald-700 hover:underline ml-4"
+            >
+              বন্ধ করুন ✕
+            </button>
+          </div>
+        )}
+
+        {/* Top Grid: Admin Class Creation + Active Hold ("আবেদন") Screen */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Screen 1: Class তৈরি (School Admin) */}
+          <section className="lg:col-span-5 bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <div className="border-b border-slate-100 pb-3 mb-4">
+              <span className="text-xs font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
+                School Admin
+              </span>
+              <h2 className="text-lg font-bold text-slate-900 mt-1">নতুন Class তৈরি করুন</h2>
+              <p className="text-xs text-slate-500">
+                প্রতিটি শিফট আলাদা Class হিসেবে তৈরি করুন (যেমন: Class 6 - Morning Shift)
+              </p>
+            </div>
+
+            <form onSubmit={handleCreateClass} className="space-y-4">
+              <div>
+                <label htmlFor="class-name-input" className="block text-sm font-medium text-slate-700 mb-1">
+                  Class-এর নাম (Class & Shift Name)
+                </label>
+                <input
+                  id="class-name-input"
+                  type="text"
+                  value={classNameInput}
+                  onChange={(e) => setClassNameInput(e.target.value)}
+                  placeholder="যেমন: Class 6 - Morning Shift"
+                  className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="total-seats-input" className="block text-sm font-medium text-slate-700 mb-1">
+                  মোট আসন সংখ্যা (Total Seats)
+                </label>
+                <input
+                  id="total-seats-input"
+                  type="number"
+                  min={1}
+                  value={totalSeatsInput}
+                  onChange={(e) => setTotalSeatsInput(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loadingAction === 'create-class'}
+                className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold rounded-lg text-sm shadow-sm transition"
+              >
+                {loadingAction === 'create-class' ? 'তৈরি হচ্ছে...' : '+ নতুন Class তৈরি করুন'}
+              </button>
+            </form>
+          </section>
+
+          {/* Screen 3: আবেদন (Current Active Application Details & Countdown) */}
+          <section className="lg:col-span-7 bg-white rounded-2xl shadow-sm border border-slate-200 p-5 flex flex-col justify-between">
+            <div>
+              <div className="border-b border-slate-100 pb-3 mb-4 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 rounded">
+                    আবেদন (Application Status)
+                  </span>
+                  <h2 className="text-lg font-bold text-slate-900 mt-1">চলমান আবেদনের অবস্থা ও ভর্তি ফি প্রদান</h2>
+                </div>
+                {activeHold && statusBadge(getEffectiveStatus(activeHold))}
+              </div>
+
+              {!activeHold ? (
+                <div className="py-10 text-center text-slate-500 text-sm bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                  বর্তমানে কোনো নির্বাচিত আবেদন নেই। নিচের <strong>Class তালিকা</strong> থেকে <strong>"আবেদন করুন"</strong> বাটনে চাপুন।
+                </div>
+              ) : (
+                (() => {
+                  const effectiveStatus = getEffectiveStatus(activeHold);
+                  const timer = formatRemainingTime(activeHold.expiresAt, nowMs);
+                  const canConfirm = effectiveStatus === 'HELD' && !timer.expired;
+                  const canCancel = effectiveStatus === 'HELD' && !timer.expired;
+
+                  return (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                        <div>
+                          <p className="text-xs text-slate-500">শ্রেণী ও শিফট (Class)</p>
+                          <p className="text-base font-bold text-slate-900">{activeHold.className || activeHold.classId}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500">আবেদন আইডি (Hold ID)</p>
+                          <p className="text-sm font-mono font-semibold text-slate-800">{activeHold.holdId}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500">বর্তমান অবস্থা (Status)</p>
+                          <div className="mt-1">{statusBadge(effectiveStatus)}</div>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500">মেয়াদ শেষ হতে বাকি সময় (Remaining Time)</p>
+                          <p
+                            data-testid="active-hold-timer"
+                            className={`text-lg font-mono font-bold ${
+                              effectiveStatus === 'CONFIRMED'
+                                ? 'text-emerald-700'
+                                : effectiveStatus === 'EXPIRED'
+                                ? 'text-rose-600'
+                                : 'text-amber-700'
+                            }`}
+                          >
+                            {effectiveStatus === 'CONFIRMED'
+                              ? 'ভর্তি নিশ্চিত হয়েছে'
+                              : effectiveStatus === 'CANCELLED'
+                              ? 'বাতিল করা হয়েছে'
+                              : timer.text}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 pt-2">
+                        <button
+                          type="button"
+                          disabled={!canConfirm || loadingAction === `confirm-${activeHold.holdId}`}
+                          onClick={() => handleConfirmHold(activeHold)}
+                          className="flex-1 py-2.5 px-4 rounded-lg font-semibold text-sm text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed transition shadow-sm"
+                        >
+                          {loadingAction === `confirm-${activeHold.holdId}` ? 'নিশ্চিত হচ্ছে...' : 'ভর্তি ফি দিন (Confirm Admission)'}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={!canCancel || loadingAction === `cancel-${activeHold.holdId}`}
+                          onClick={() => handleCancelHold(activeHold)}
+                          className="py-2.5 px-4 rounded-lg font-semibold text-sm text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed transition"
+                        >
+                          {loadingAction === `cancel-${activeHold.holdId}` ? 'বাতিল হচ্ছে...' : 'বাতিল (Cancel)'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+          </section>
+        </div>
+
+        {/* Screen 2: Class তালিকা (Live Auto-Updating Class List) */}
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-3 mb-4 gap-2">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Class তালিকা (সকল শ্রেণী ও আসনের তাৎক্ষণিক হিসাব)</h2>
+              <p className="text-xs text-slate-500">
+                আসন সংখ্যা পেজ রিলোড ছাড়াই প্রতি ২ সেকেন্ড পরপর স্বয়ংক্রিয়ভাবে হালনাগাদ হয়
+              </p>
+            </div>
+            <span className="text-xs font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+              ● Live Auto-Refresh সক্রিয়
+            </span>
+          </div>
+
+          {classes.length === 0 ? (
+            <div className="py-8 text-center text-slate-500 text-sm">
+              এখনো কোনো Class তৈরি করা হয়নি। উপরের ফর্ম থেকে নতুন Class তৈরি করুন।
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase bg-slate-50">
+                    <th className="py-3 px-4">Class-এর নাম</th>
+                    <th className="py-3 px-4 text-center">মোট আসন (Total)</th>
+                    <th className="py-3 px-4 text-center">Hold-এ থাকা (Held)</th>
+                    <th className="py-3 px-4 text-center">নিশ্চিত (Confirmed)</th>
+                    <th className="py-3 px-4 text-center">খালি আসন (Available)</th>
+                    <th className="py-3 px-4 text-right">পদক্ষেপ (Action)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 text-sm">
+                  {classes.map((cls) => (
+                    <tr key={cls.id} className="hover:bg-slate-50/80 transition">
+                      <td className="py-3.5 px-4 font-semibold text-slate-900">
+                        {cls.name}
+                        <span className="block text-xs font-mono text-slate-400">{cls.id}</span>
+                      </td>
+                      <td className="py-3.5 px-4 text-center font-mono font-semibold text-slate-800">{cls.totalSeats}</td>
+                      <td className="py-3.5 px-4 text-center font-mono font-semibold text-amber-700">{cls.heldSeats}</td>
+                      <td className="py-3.5 px-4 text-center font-mono font-semibold text-emerald-700">{cls.confirmedSeats}</td>
+                      <td className="py-3.5 px-4 text-center">
+                        <span
+                          className={`inline-block px-2.5 py-0.5 rounded-full font-mono font-bold text-xs ${
+                            cls.availableSeats > 0 ? 'bg-indigo-50 text-indigo-700' : 'bg-rose-100 text-rose-700'
+                          }`}
+                        >
+                          {cls.availableSeats}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <button
+                          type="button"
+                          disabled={loadingAction === `hold-${cls.id}`}
+                          onClick={() => handleApplyHold(cls)}
+                          className={`px-4 py-2 rounded-lg text-xs font-bold transition shadow-sm ${
+                            cls.availableSeats > 0
+                              ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                              : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                          }`}
+                        >
+                          {loadingAction === `hold-${cls.id}` ? 'অপেক্ষা করুন...' : 'আবেদন করুন'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        {/* Screen 4: আমার আবেদন (All Applications for Current Student) */}
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+          <div className="border-b border-slate-100 pb-3 mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">আমার আবেদন (My Applications)</h2>
+              <p className="text-xs text-slate-500">
+                শিক্ষার্থী আইডি: <span className="font-mono font-semibold text-slate-700">{studentId || 'প্রদান করা হয়নি'}</span> — এই শিক্ষার্থীর সকল আবেদনের তালিকা ও বর্তমান অবস্থা
+              </p>
+            </div>
+          </div>
+
+          {!studentId.trim() ? (
+            <div className="py-6 text-center text-slate-500 text-sm">
+              নিজের আবেদনগুলো দেখতে উপরে ১৭ অঙ্কের জন্ম নিবন্ধন নম্বর লিখুন।
+            </div>
+          ) : myHolds.length === 0 ? (
+            <div className="py-6 text-center text-slate-500 text-sm">
+              এই জন্ম নিবন্ধন নম্বরে এখনো কোনো আবেদন পাওয়া যায়নি।
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase bg-slate-50">
+                    <th className="py-3 px-4">Class-এর নাম</th>
+                    <th className="py-3 px-4">অবস্থা (Status)</th>
+                    <th className="py-3 px-4">বাকি সময় (Remaining)</th>
+                    <th className="py-3 px-4 text-right">পদক্ষেপ (Actions)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 text-sm">
+                  {myHolds.map((hold) => {
+                    const effectiveStatus = getEffectiveStatus(hold);
+                    const timer = formatRemainingTime(hold.expiresAt, nowMs);
+                    const canConfirm = effectiveStatus === 'HELD' && !timer.expired;
+                    const canCancel = effectiveStatus === 'HELD' && !timer.expired;
+
+                    return (
+                      <tr
+                        key={hold.holdId}
+                        onClick={() => setSelectedHoldId(hold.holdId)}
+                        className={`cursor-pointer transition ${
+                          activeHold?.holdId === hold.holdId ? 'bg-indigo-50/60' : 'hover:bg-slate-50'
+                        }`}
+                      >
+                        <td className="py-3.5 px-4 font-semibold text-slate-900">
+                          {hold.className}
+                          <span className="block text-xs font-mono text-slate-400">{hold.holdId}</span>
+                        </td>
+                        <td className="py-3.5 px-4">{statusBadge(effectiveStatus)}</td>
+                        <td className="py-3.5 px-4 font-mono text-xs font-semibold text-slate-700">
+                          {effectiveStatus === 'CONFIRMED'
+                            ? 'নিশ্চিত (Confirmed)'
+                            : effectiveStatus === 'CANCELLED'
+                            ? 'বাতিল (Cancelled)'
+                            : timer.text}
+                        </td>
+                        <td className="py-3.5 px-4 text-right space-x-2" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            disabled={!canConfirm || loadingAction === `confirm-${hold.holdId}`}
+                            onClick={() => handleConfirmHold(hold)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed transition"
+                          >
+                            ভর্তি ফি দিন
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canCancel || loadingAction === `cancel-${hold.holdId}`}
+                            onClick={() => handleCancelHold(hold)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200 disabled:cursor-not-allowed transition"
+                          >
+                            বাতিল
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </main>
+    </div>
+  );
+}
