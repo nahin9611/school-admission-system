@@ -1,6 +1,7 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using SchoolAdmission.Api.Data;
+using SchoolAdmission.Api.Models;
 using SchoolAdmission.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -54,7 +55,9 @@ using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
     var logger = services.GetRequiredService<ILogger<Program>>();
+    var config = services.GetRequiredService<IConfiguration>();
     var db = services.GetRequiredService<AdmissionDbContext>();
+    var isTestEnv = config["UseInMemoryDatabase"] == "true";
 
     const int maxRetries = 10;
     for (int attempt = 1; attempt <= maxRetries; attempt++)
@@ -62,6 +65,15 @@ using (var scope = app.Services.CreateScope())
         try
         {
             db.Database.EnsureCreated();
+            if (!isTestEnv && !db.Classes.Any())
+            {
+                db.Classes.AddRange(
+                    new SchoolClass { Id = "c_6morn", Name = "Class 6 - Morning Shift", TotalSeats = 120, CreatedAt = DateTime.UtcNow },
+                    new SchoolClass { Id = "c_6day", Name = "Class 6 - Day Shift", TotalSeats = 100, CreatedAt = DateTime.UtcNow.AddSeconds(1) },
+                    new SchoolClass { Id = "c_7morn", Name = "Class 7 - Morning Shift", TotalSeats = 80, CreatedAt = DateTime.UtcNow.AddSeconds(2) }
+                );
+                db.SaveChanges();
+            }
             break;
         }
         catch (Exception ex)

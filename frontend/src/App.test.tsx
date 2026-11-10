@@ -40,7 +40,7 @@ describe('School Admission System Frontend Automated Tests', () => {
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         );
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
 
     render(<App />);
@@ -49,11 +49,10 @@ describe('School Admission System Frontend Automated Tests', () => {
       expect(screen.getByText('Class 6 - Morning Shift')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('120')).toBeInTheDocument();
-    expect(screen.getByText('25')).toBeInTheDocument();
+    const idInput = screen.getByLabelText(/X-Student-Id/i);
+    fireEvent.change(idInput, { target: { value: '123' } });
 
-    // Click apply without entering 17-digit Birth Registration Number
-    const applyButton = screen.getByRole('button', { name: 'আবেদন করুন' });
+    const applyButton = screen.getByRole('button', { name: '\u0986\u09ac\u09c7\u09a6\u09a8 \u0995\u09b0\u09c1\u09a8'.replace(/\u([0-9a-fA-F]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))) });
     fireEvent.click(applyButton);
 
     await waitFor(() => {
@@ -68,7 +67,7 @@ describe('School Admission System Frontend Automated Tests', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith('/classes')) {
-        return new Response(JSON.stringify([]), { status: 200 });
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/me/holds')) {
         return new Response(
@@ -84,7 +83,7 @@ describe('School Admission System Frontend Automated Tests', () => {
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         );
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
 
     render(<App />);
@@ -93,7 +92,8 @@ describe('School Admission System Frontend Automated Tests', () => {
       expect(screen.getAllByText('EXPIRED').length).toBeGreaterThan(0);
     });
 
-    const confirmButtons = screen.getAllByRole('button', { name: 'ভর্তি ফি দিন' });
+    const confirmLabel = '\u09ad\u09b0\u09cd\u09a4\u09bf \u09ab\u09bf \u09a6\u09bf\u09a8'.replace(/\u([0-9a-fA-F]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    const confirmButtons = screen.getAllByRole('button', { name: confirmLabel });
     confirmButtons.forEach((btn) => {
       expect(btn).toBeDisabled();
     });

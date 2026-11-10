@@ -20,15 +20,15 @@ async function parseErrorMessage(response: Response): Promise<string> {
   }
 
   if (response.status === 409) {
-    return 'আসন খালি নেই অথবা এই শ্রেণীতে আপনার ইতিমধ্যে একটি আবেদন রয়েছে (409 Conflict)৷';
+    return 'আসন খালি নেই অথবা এই শ্রেণীতে আপনার ইতিমধ্যে একটি আবেদন রয়েছে (409 Conflict)।';
   }
   if (response.status === 404) {
-    return 'তথ্যটি খুঁজে পাওয়া যায়নি (404 Not Found)৷';
+    return 'তথ্যটি খুঁজে পাওয়া যায়নি (404 Not Found)।';
   }
   if (response.status === 400) {
-    return 'ভুল তথ্য প্রদান করা হয়েছে (400 Bad Request)৷';
+    return 'ভুল তথ্য প্রদান করা হয়েছে (400 Bad Request)।';
   }
-  return `সার্ভার ত্রুটি ঘটেছে (HTTP ${response.status})৷`;
+  return `সার্ভার ত্রুটি ঘটেছে (HTTP ${response.status})।`;
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -42,7 +42,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       }
     });
   } catch {
-    throw new Error('সার্ভারের সাথে যোগাযোগ করা যাচ্ছে না (Server is unreachable)৷');
+    throw new Error('সার্ভারের সাথে যোগাযোগ করা যাচ্ছে না (Server is unreachable)।');
   }
 
   if (!response.ok) {
