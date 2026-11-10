@@ -1,4 +1,4 @@
-﻿export type HoldStatus = 'HELD' | 'CONFIRMED' | 'EXPIRED' | 'CANCELLED';
+export type HoldStatus = 'HELD' | 'CONFIRMED' | 'EXPIRED' | 'CANCELLED';
 
 export interface ClassSummary {
   id: string;
