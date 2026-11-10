@@ -53,7 +53,7 @@ describe('School Admission System Frontend Automated Tests', () => {
     expect(screen.getByText('25')).toBeInTheDocument();
 
     // Click apply without entering 17-digit Birth Registration Number
-    const applyButton = screen.getByRole('button', { name: '\u0986\u09ac\u09c7\u09a6\u09a8 \u0995\u09b0\u09c1\u09a8' });
+    const applyButton = screen.getByRole('button', { name: 'আবেদন করুন' });
     fireEvent.click(applyButton);
 
     await waitFor(() => {
@@ -93,7 +93,7 @@ describe('School Admission System Frontend Automated Tests', () => {
       expect(screen.getAllByText('EXPIRED').length).toBeGreaterThan(0);
     });
 
-    const confirmButtons = screen.getAllByRole('button', { name: '\u09ad\u09b0\u09cd\u09a4\u09bf \u09ab\u09bf \u09a6\u09bf\u09a8' });
+    const confirmButtons = screen.getAllByRole('button', { name: 'ভর্তি ফি দিন' });
     confirmButtons.forEach((btn) => {
       expect(btn).toBeDisabled();
     });
