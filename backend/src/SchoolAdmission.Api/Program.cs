@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using SchoolAdmission.Api.Data;
 using SchoolAdmission.Api.Services;
 
@@ -8,15 +9,26 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Allow connection string override via DATABASE_URL, DB_CONNECTION_STRING, or ConnectionStrings__DefaultConnection
 var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? Environment.GetEnvironmentVariable("DB_CONNECTION_STRING")
     ?? builder.Configuration.GetConnectionString("DefaultConnection")
     ?? "Host=localhost;Port=5432;Database=school_admission;Username=postgres;Password=postgres";
 
-builder.Services.AddDbContext<AdmissionDbContext>(options =>
+builder.Services.AddDbContext<AdmissionDbContext>((sp, options) =>
 {
-    options.UseNpgsql(connectionString);
+    var config = sp.GetRequiredService<IConfiguration>();
+    var useInMemory = config["UseInMemoryDatabase"] == "true";
+
+    if (useInMemory)
+    {
+        var inMemoryDbName = config["InMemoryDatabaseName"] ?? "SchoolAdmissionTestDb";
+        options.UseInMemoryDatabase(inMemoryDbName)
+               .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning));
+    }
+    else
+    {
+        options.UseNpgsql(connectionString);
+    }
 });
 
 builder.Services.AddHostedService<HoldExpirationService>();
@@ -38,7 +50,6 @@ app.UseSwaggerUI();
 app.UseCors("AllowAll");
 app.MapControllers();
 
-// Automatically create/migrate PostgreSQL schema on startup with retry for Docker startup readiness
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;

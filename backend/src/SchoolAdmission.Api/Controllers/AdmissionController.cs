@@ -22,8 +22,7 @@ public class AdmissionController : ControllerBase
 
     private int GetHoldDurationSeconds()
     {
-        var envVal = Environment.GetEnvironmentVariable("HOLD_DURATION_SECONDS")
-                     ?? _config["HOLD_DURATION_SECONDS"];
+        var envVal = _config["HOLD_DURATION_SECONDS"] ?? Environment.GetEnvironmentVariable("HOLD_DURATION_SECONDS");
         if (int.TryParse(envVal, out var seconds) && seconds > 0)
         {
             return seconds;
@@ -443,3 +442,4 @@ public class AdmissionController : ControllerBase
         return Ok(response);
     }
 }
+
